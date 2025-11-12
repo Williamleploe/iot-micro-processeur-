@@ -23,7 +23,7 @@ Créer un **système de contrôle d’accès intelligent** utilisant un **badge 
 |----------|------|-----------|
 | **ESP32** | Microcontrôleur principal | Wi-Fi intégré, idéal pour MQTT |
 | **Module RFID RC522** | Lecture des badges | SPI |
-| **Lecteur d’empreinte (R307)** | Identification biométrique | UART |
+| **Lecteur d’empreinte (R503)** | Identification biométrique | UART |
 | **Servo moteur (SG90 / MG995)** | Ouverture/fermeture de porte | PWM |
 | **Écran LCD 16x2 (I2C)** | Affichage local | 4 fils : VCC, GND, SDA, SCL |
 | **Alimentation 5V / 2A** | Alimente les modules | Stable et sécurisée |
