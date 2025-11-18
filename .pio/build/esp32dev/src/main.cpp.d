@@ -147,4 +147,5 @@
  .pio/libdeps/esp32dev/ESP32Servo/src/analogWrite.h \
  C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-ledc.h \
  .pio/libdeps/esp32dev/ESP32Servo/src/ESP32PWM.h \
- .pio/libdeps/esp32dev/ESP32Servo/src/ESP32Tone.h
+ .pio/libdeps/esp32dev/ESP32Servo/src/ESP32Tone.h \
+ C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src/Preferences.h

@@ -10,6 +10,7 @@
             "includePath": [
                 "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/include",
                 "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/src",
+                "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/.pio/libdeps/esp32dev/ESP32Servo/src",
                 "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/.pio/libdeps/esp32dev/LiquidCrystal_I2C",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
@@ -231,7 +232,6 @@
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",
@@ -251,6 +251,7 @@
                 "path": [
                     "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/include",
                     "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/src",
+                    "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/.pio/libdeps/esp32dev/ESP32Servo/src",
                     "C:/Users/rapha/Documents/Ynov B2/Electronique/Project name/.pio/libdeps/esp32dev/LiquidCrystal_I2C",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
@@ -472,7 +473,6 @@
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                    "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",
