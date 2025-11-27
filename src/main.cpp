@@ -420,8 +420,15 @@ void loop() {
   int p = finger.getImage();
   if (p == FINGERPRINT_OK) {
     if (finger.image2Tz(1) == FINGERPRINT_OK) {
-      int res = finger.fingerFastSearch();
-      if (res == FINGERPRINT_OK) {
+        
+        // Utilise la recherche standard (plus compatible)
+        int res = finger.fingerSearch(); 
+        
+        // Si ta librairie est trop ancienne et ne reconnait pas fingerSearch(),
+        // essaie de changer la vitesse (voir note plus bas), mais fingerSearch 
+        // est la solution à 90% des cas.
+
+        if (res == FINGERPRINT_OK) {
         uint16_t id = finger.fingerID;
         Serial.print("Fingerprint found ID: ");
         Serial.println(id);
