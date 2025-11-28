@@ -10,6 +10,8 @@
             "includePath": [
                 "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/include",
                 "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/src",
+                "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
+                "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/lib/PubSubClient/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/.pio/libdeps/esp32dev/ESP32Servo/src",
                 "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/.pio/libdeps/esp32dev/LiquidCrystal_I2C",
@@ -213,7 +215,6 @@
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/dio_qspi/include",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/variants/esp32",
-                "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/lib/R503Lib",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -241,7 +242,6 @@
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                 ""
@@ -251,6 +251,8 @@
                 "path": [
                     "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/include",
                     "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/src",
+                    "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
+                    "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/lib/PubSubClient/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/.pio/libdeps/esp32dev/ESP32Servo/src",
                     "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/.pio/libdeps/esp32dev/LiquidCrystal_I2C",
@@ -454,7 +456,6 @@
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/dio_qspi/include",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/variants/esp32",
-                    "C:/Users/rapha/Documents/Ynov B2/IOT/Projet IOT/lib/R503Lib",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -482,7 +483,6 @@
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                    "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "C:/Users/rapha/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                     ""

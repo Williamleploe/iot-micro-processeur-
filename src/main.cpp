@@ -1,3 +1,7 @@
+// MQTT + WiFi + Auth system (RFID + Fingerprint) - ESP32
+#include <WiFi.h>
+#include <PubSubClient.h>
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -34,6 +38,23 @@ const unsigned int SERVO_CLOSED_POS = 0;
 const unsigned long DISPLAY_MS = 1500;
 const char *PREF_NS = "auth";
 
+// ----------------- ===== MQTT / WiFi config =====
+// <-- TU AS DÉJÀ MIS TES IDENTIFIANTS WI-FI ICI -->
+const char* WIFI_SSID = "Bbox-857F91A1";
+const char* WIFI_PASS = "fTPFG!Avek6T1q*M";
+
+const char* MQTT_SERVER = "broker.emqx.io";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = ""; // si auth nécessaire remplis ici
+const char* MQTT_PASS = ""; // si auth nécessaire remplis ici
+
+const char* TOPIC_EVENT = "auth/door/event";
+const char* TOPIC_COMMAND = "auth/door/command";
+const char* TOPIC_STATUS = "auth/door/status";
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
 // ----------------- Helpers -----------------
 void lcdPrintBoth(const char *l1, const char *l2) {
   lcd.clear();
@@ -60,14 +81,8 @@ void openLock() {
 }
 
 // ----------------- Persistence utilities -----------------
-// Stored as: userN_type ("rfid" or "fp"), userN_key, userN_name
-// count under "count", next fingerprint template id under "next_fp_id"
-uint16_t userCount() {
-  return prefs.getUInt("count", 0);
-}
-void setUserCount(uint16_t v) {
-  prefs.putUInt("count", v);
-}
+uint16_t userCount() { return prefs.getUInt("count", 0); }
+void setUserCount(uint16_t v) { prefs.putUInt("count", v); }
 
 void addUserRecordRaw(const char *type, const char *key, const char *name) {
   uint16_t n = userCount();
@@ -151,6 +166,124 @@ void clearAllUsers() {
   prefs.putUInt("next_fp_id", 1);
 }
 
+// ----------------- MQTT helpers -----------------
+void publishEvent(const char* result, const char* method, const char* key, const char* name) {
+  if (!mqttClient.connected()) {
+    Serial.println("publishEvent: mqtt not connected");
+    return;
+  }
+  String payload = "{";
+  payload += "\"result\":\""; payload += result; payload += "\",";
+  payload += "\"method\":\""; payload += method; payload += "\",";
+  payload += "\"key\":\""; payload += key; payload += "\",";
+  payload += "\"name\":\""; payload += name; payload += "\",";
+  payload += "\"ts\":"; payload += String(millis());
+  payload += "}";
+  mqttClient.publish(TOPIC_EVENT, payload.c_str());
+  Serial.print("MQTT published: ");
+  Serial.println(payload);
+}
+
+void publishStatus(const char* s) {
+  if (!mqttClient.connected()) return;
+  mqttClient.publish(TOPIC_STATUS, s);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  msg.trim();
+  Serial.print("MQTT RX topic=");
+  Serial.print(topic);
+  Serial.print(" msg=");
+  Serial.println(msg);
+
+  if (String(topic) == TOPIC_COMMAND) {
+    if (msg.equalsIgnoreCase("OPEN")) {
+      Serial.println("MQTT command: OPEN");
+      lcdPrintBoth("MQTT","OPEN");
+      openLock();
+      publishEvent("remote_open","mqtt","", "remote");
+    } else if (msg.equalsIgnoreCase("LIST")) {
+      uint16_t n = userCount();
+      String payload = "{\"cmd\":\"list\",\"count\":";
+      payload += String(n);
+      payload += ",\"users\":[";
+      for (uint16_t i = 0; i < n; ++i) {
+        if (i) payload += ",";
+        String base = "user" + String(i) + "_";
+        String t = prefs.getString((base + "type").c_str(), "");
+        String k = prefs.getString((base + "key").c_str(), "");
+        String name = prefs.getString((base + "name").c_str(), "");
+        payload += "{\"i\":" + String(i) + ",\"type\":\"" + t + "\",\"key\":\"" + k + "\",\"name\":\"" + name + "\"}";
+      }
+      payload += "]}";
+      mqttClient.publish(TOPIC_EVENT, payload.c_str());
+    } else if (msg.equalsIgnoreCase("CLEAR")) {
+      clearAllUsers();
+      mqttClient.publish(TOPIC_EVENT, "{\"cmd\":\"clear\",\"result\":\"ok\"}");
+      Serial.println("Cleared users per MQTT command");
+    } else {
+      Serial.println("MQTT unknown command");
+      mqttClient.publish(TOPIC_STATUS, "unknown_cmd");
+    }
+  }
+}
+
+void connectWiFi() {
+  Serial.print("Connecting WiFi ");
+  Serial.println(WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    delay(250);
+    Serial.print(".");
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.print("WiFi connected, IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("");
+    Serial.println("WiFi connect failed");
+  }
+}
+
+void reconnectMqtt() {
+  if (mqttClient.connected()) return;
+
+  Serial.print("Resolving MQTT host ");
+  Serial.println(MQTT_SERVER);
+  IPAddress brokerIp;
+  if (WiFi.hostByName(MQTT_SERVER, brokerIp)) {
+    Serial.print("Resolved "); Serial.print(MQTT_SERVER); Serial.print(" -> "); Serial.println(brokerIp.toString());
+  } else {
+    Serial.print("DNS resolve failed for "); Serial.println(MQTT_SERVER);
+    // continue anyway; PubSubClient accepts host string (it will try resolve internally)
+  }
+
+  Serial.print("Connecting MQTT...");
+  // Use MAC-based clientId to reduce collisions
+  String clientId = "ESP32-" + WiFi.macAddress();
+  // PubSubClient connect
+  while (!mqttClient.connected()) {
+    bool ok;
+    if (MQTT_USER && strlen(MQTT_USER) > 0) {
+      ok = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS);
+    } else {
+      ok = mqttClient.connect(clientId.c_str());
+    }
+    if (ok) break;
+    Serial.print(".");
+    delay(2000);
+  }
+  Serial.println("");
+  Serial.println("MQTT connected");
+  mqttClient.subscribe(TOPIC_COMMAND);
+  publishStatus("connected");
+}
+
 // ----------------- Enrollment flows -----------------
 String readLineSerial(unsigned long timeout = 30000) {
   unsigned long start = millis();
@@ -191,6 +324,7 @@ void enrollRFID() {
       Serial.print("RFID enrolled: ");
       Serial.println(name);
       lcdPrintBoth("RFID enrolled:", name.c_str());
+      publishEvent("enrolled","rfid", uid.c_str(), name.c_str());
       delay(1500);
       rfid.PICC_HaltA();
       return;
@@ -201,14 +335,12 @@ void enrollRFID() {
   Serial.println("ENROLL RFID: Timeout");
 }
 
-// Improved fingerprint enrollment: store ID immediately, then ask name
 bool enrollFingerprint() {
   lcdPrintBoth("Enroll Finger", "Place finger...");
   Serial.println(F("ENROLL FINGER: Follow prompts"));
   delay(300);
 
   int p;
-  // Wait first image
   unsigned long start = millis();
   while (millis() - start < 20000) {
     p = finger.getImage();
@@ -223,7 +355,6 @@ bool enrollFingerprint() {
   Serial.println("Remove finger");
   delay(1200);
 
-  // Second image
   lcdPrintBoth("Place same finger", "again...");
   start = millis();
   while (millis() - start < 20000) {
@@ -236,7 +367,6 @@ bool enrollFingerprint() {
 
   if (finger.createModel() != FINGERPRINT_OK) { lcdPrintBoth("Enroll failed", "createModel"); return false; }
 
-  // Determine ID and attempt to store
   uint16_t nextId = prefs.getUInt("next_fp_id", 1);
   uint16_t storedId = 0;
   for (uint16_t trial = 0; trial < 200; ++trial) {
@@ -250,7 +380,7 @@ bool enrollFingerprint() {
       storedId = id;
       Serial.print("Stored at ID ");
       Serial.println(id);
-      prefs.putUInt("next_fp_id", id + 1); // advance next id
+      prefs.putUInt("next_fp_id", id + 1);
       break;
     } else if (res == FINGERPRINT_BADLOCATION) {
       Serial.println("Erreur: emplacement occupé, test suivant");
@@ -270,25 +400,23 @@ bool enrollFingerprint() {
 
   if (storedId == 0) { lcdPrintBoth("Enroll failed", "no slot"); return false; }
 
-  // Store metadata placeholder, commit record immediately with placeholder name then update name
   uint16_t indexBefore = userCount();
   addUserRecordRaw("fp", String(storedId).c_str(), ("FP_" + String(storedId)).c_str());
   lcdPrintBoth("Enrolled ID:", String(storedId).c_str());
   Serial.print("Stored template ID: ");
   Serial.println(storedId);
 
-  // Ask name (timeout allowed)
   Serial.println("Type a name for this fingerprint and press Enter (10s):");
   String name = readLineSerial(10000);
   if (name.length() == 0) {
     name = "FP_user_" + String(storedId);
     Serial.println("No name provided, using default: " + name);
   }
-  // Update the name we just stored (indexBefore)
   updateUserNameAtIndex(indexBefore, name.c_str());
   Serial.print("Fingerprint enrolled: ");
   Serial.println(name);
   lcdPrintBoth("FP enrolled:", name.c_str());
+  publishEvent("enrolled","finger", String(storedId).c_str(), name.c_str());
   delay(1500);
   return true;
 }
@@ -324,29 +452,23 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // Preferences
   prefs.begin(PREF_NS, false);
 
-  // LCD
   Wire.begin(I2C_SDA, I2C_SCL);
   lcd.init();
   lcd.backlight();
   lcdPrintBoth("System starting", "");
   delay(800);
 
-  // SPI RFID
   SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
   rfid.PCD_Init();
 
-  // Finger UART2
   FingerSerial.begin(57600, SERIAL_8N1, FP_RX, FP_TX);
   finger.begin(57600);
 
-  // Servo
   lockServo.attach(SERVO_PIN);
   lockServo.write(SERVO_CLOSED_POS);
 
-  // Startup messages and diagnostics
   bool fpok = finger.verifyPassword();
   if (fpok) {
     Serial.println("Fingerprint sensor OK");
@@ -362,6 +484,13 @@ void setup() {
   Serial.print("Stored users count: ");
   Serial.println(userCount());
 
+  // WiFi & MQTT init
+  connectWiFi();
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+
+  reconnectMqtt();
+
   lcdPrintBoth("Ready", "Scan...");
   delay(500);
   lcd.setCursor(0,1);
@@ -369,7 +498,13 @@ void setup() {
 }
 
 void loop() {
-  // Serial commands
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) reconnectMqtt();
+    mqttClient.loop();
+  } else {
+    connectWiFi();
+  }
+
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -388,6 +523,7 @@ void loop() {
       Serial.println("Clearing all user prefs...");
       clearAllUsers();
       Serial.println("Cleared");
+      mqttClient.publish(TOPIC_EVENT, "{\"cmd\":\"cleared_via_serial\"}");
     } else if (cmd == "delmod") {
       emptyFingerprintLibrary();
     } else {
@@ -406,10 +542,12 @@ void loop() {
       Serial.println(name);
       lcdPrintBoth("Access granted", name.c_str());
       openLock();
+      publishEvent("granted","rfid", uid.c_str(), name.c_str());
     } else {
       Serial.print("Access denied UID: ");
       Serial.println(uid);
       lcdPrintBoth("Access denied", uid.c_str());
+      publishEvent("denied","rfid", uid.c_str(), "");
     }
     rfid.PICC_HaltA();
     delay(DISPLAY_MS);
@@ -420,35 +558,30 @@ void loop() {
   int p = finger.getImage();
   if (p == FINGERPRINT_OK) {
     if (finger.image2Tz(1) == FINGERPRINT_OK) {
-        
-        // Utilise la recherche standard (plus compatible)
-        int res = finger.fingerSearch(); 
-        
-        // Si ta librairie est trop ancienne et ne reconnait pas fingerSearch(),
-        // essaie de changer la vitesse (voir note plus bas), mais fingerSearch 
-        // est la solution à 90% des cas.
-
+        int res = finger.fingerSearch();
         if (res == FINGERPRINT_OK) {
-        uint16_t id = finger.fingerID;
-        Serial.print("Fingerprint found ID: ");
-        Serial.println(id);
-        String name = findUserByFP(id);
-        if (name.length()) {
-          Serial.print("Access granted: ");
-          Serial.println(name);
-          lcdPrintBoth("Access granted", name.c_str());
-          openLock();
-        } else {
-          Serial.print("Access denied FP ID ");
+          uint16_t id = finger.fingerID;
+          Serial.print("Fingerprint found ID: ");
           Serial.println(id);
-          lcdPrintBoth("Access denied FP", String(id).c_str());
+          String name = findUserByFP(id);
+          if (name.length()) {
+            Serial.print("Access granted: ");
+            Serial.println(name);
+            lcdPrintBoth("Access granted", name.c_str());
+            openLock();
+            publishEvent("granted","finger", String(id).c_str(), name.c_str());
+          } else {
+            Serial.print("Access denied FP ID ");
+            Serial.println(id);
+            lcdPrintBoth("Access denied FP", String(id).c_str());
+            publishEvent("denied","finger", String(id).c_str(), "");
+          }
+          delay(DISPLAY_MS);
+          lcdPrintBoth("Ready", "Scan...");
+        } else {
+          Serial.print("Fingerprint not found, search res = ");
+          Serial.println(res);
         }
-        delay(DISPLAY_MS);
-        lcdPrintBoth("Ready", "Scan...");
-      } else {
-        Serial.print("Fingerprint not found, search res = ");
-        Serial.println(res);
-      }
     } else {
       Serial.println("img2tz failed");
     }

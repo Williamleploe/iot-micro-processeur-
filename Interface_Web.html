@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>MQTT Web UI</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0;padding:12px;background:#f6f8fa;color:#111}
+    header{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+    h1{font-size:18px;margin:0}
+    .box{background:#fff;border:1px solid #e1e4e8;padding:12px;border-radius:6px;margin-bottom:12px}
+    .row{display:flex;gap:8px;align-items:center}
+    label{font-size:13px;color:#333}
+    input[type=text], input[type=number], select, textarea {padding:6px;border:1px solid #ccd; border-radius:4px;}
+    button{padding:6px 10px;border:0;border-radius:5px;background:#007bff;color:#fff;cursor:pointer}
+    button.secondary{background:#6c757d}
+    button.warn{background:#dc3545}
+    #msgs{height:360px;overflow:auto;padding:8px;background:#0b0c10;color:#e6edf3;border-radius:6px;font-family:monospace;font-size:13px}
+    .msg{margin-bottom:8px;padding:6px;border-radius:4px;border-left:4px solid rgba(255,255,255,0.06)}
+    .topic{color:#9ad; font-weight:600}
+    .ts{color:#8d9aa5;font-size:12px;margin-left:8px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .left{flex:1}
+    .small{font-size:13px;padding:4px 8px}
+    .connected{color:green;font-weight:700}
+    .disconnected{color:#c0392b;font-weight:700}
+    footer{margin-top:10px;font-size:13px;color:#666}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MQTT Web UI — Broker</h1>
+    <div id="status" class="disconnected">disconnected</div>
+  </header>
+
+  <div class="box">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <div style="min-width:220px">
+        <label>Host</label><br>
+        <input type="text" id="host" value="broker.emqx.io" />
+      </div>
+      <div style="width:90px">
+        <label>Port</label><br>
+        <input type="number" id="port" value="8083" />
+      </div>
+      <div style="width:120px">
+        <label>Path</label><br>
+        <input type="text" id="path" value="/mqtt" />
+      </div>
+      <div style="width:180px">
+        <label>ClientId</label><br>
+        <input type="text" id="clientId" />
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:flex-end">
+        <button id="btnConnect">Connect</button>
+        <button id="btnDisconnect" class="secondary" style="margin-top:6px">Disconnect</button>
+      </div>
+    </div>
+    <div style="margin-top:8px">
+      <label><input type="checkbox" id="useTLS" /> Use WSS (TLS)</label>
+      <span style="margin-left:12px;color:#666;font-size:13px">Si ton broker supporte WebSockets sécurisés, cochez</span>
+    </div>
+  </div>
+
+  <div class="box controls">
+    <div class="left">
+      <label>Subscribe topic</label><br>
+      <input type="text" id="subTopic" placeholder="ex: auth/door/#" style="width:60%" />
+      <button id="btnSub" class="small">Subscribe</button>
+      <button id="btnUnsub" class="small secondary">Unsubscribe</button>
+      <div id="subs" style="margin-top:8px;color:#333;font-size:13px"></div>
+    </div>
+
+    <div style="min-width:300px">
+      <label>Publish</label><br>
+      <input type="text" id="pubTopic" placeholder="topic" style="width:45%" />
+      <input type="text" id="pubPayload" placeholder='payload (text or JSON)' style="width:45%" />
+      <div style="margin-top:6px">
+        <button id="btnPub" class="small">Publish</button>
+        <button id="btnOpen" class="small">OPEN</button>
+        <button id="btnList" class="small">LIST</button>
+        <button id="btnClear" class="small warn">CLEAR</button>
+        <button id="btnCopy" class="small secondary">Copy log</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div><strong>Message log</strong></div>
+      <div style="font-size:13px;color:#666">Auto-scroll: <label><input type="checkbox" id="autoScroll" checked /></label></div>
+    </div>
+    <div id="msgs" aria-live="polite"></div>
+  </div>
+
+  <footer>
+    Sauvegarde locale : ouvre ce fichier dans ton navigateur. <br>
+    Si ton broker ne supporte pas WebSockets, utilise un broker qui le supporte ou configure ton broker (ex: Mosquitto/EMQX) pour activer WebSockets.
+  </footer>
+
+  <!-- MQTT.js via CDN -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script>
+    // DOM refs
+    const hostEl = document.getElementById('host');
+    const portEl = document.getElementById('port');
+    const pathEl = document.getElementById('path');
+    const clientIdEl = document.getElementById('clientId');
+    const btnConnect = document.getElementById('btnConnect');
+    const btnDisconnect = document.getElementById('btnDisconnect');
+    const statusEl = document.getElementById('status');
+
+    const btnSub = document.getElementById('btnSub');
+    const btnUnsub = document.getElementById('btnUnsub');
+    const subTopicEl = document.getElementById('subTopic');
+    const subsDiv = document.getElementById('subs');
+
+    const pubTopicEl = document.getElementById('pubTopic');
+    const pubPayloadEl = document.getElementById('pubPayload');
+    const btnPub = document.getElementById('btnPub');
+
+    const btnOpen = document.getElementById('btnOpen');
+    const btnList = document.getElementById('btnList');
+    const btnClear = document.getElementById('btnClear');
+    const btnCopy = document.getElementById('btnCopy');
+
+    const msgsEl = document.getElementById('msgs');
+    const autoScrollEl = document.getElementById('autoScroll');
+    const useTLSEl = document.getElementById('useTLS');
+
+    let client = null;
+    let subscriptions = new Set();
+
+    // util: generate clientId if not provided (MAC-like random)
+    function ensureClientId() {
+      if (!clientIdEl.value) {
+        clientIdEl.value = 'webui-' + Math.random().toString(16).substr(2,8);
+      }
+    }
+
+    function addLog(topic, payload, dir='recv') {
+      const d = new Date();
+      const ts = d.toLocaleString();
+      const container = document.createElement('div');
+      container.className = 'msg';
+      const top = document.createElement('div');
+      top.innerHTML = `<span class="topic">${escapeHtml(topic)}</span> <span class="ts">${ts}</span>`;
+      const content = document.createElement('pre');
+      content.style.margin = '6px 0 0 0';
+      content.style.whiteSpace = 'pre-wrap';
+      content.textContent = payload;
+      container.appendChild(top);
+      container.appendChild(content);
+      msgsEl.appendChild(container);
+      if (autoScrollEl.checked) msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
+
+    function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+    function setStatus(connected) {
+      if (connected) {
+        statusEl.textContent = 'connected';
+        statusEl.className = 'connected';
+      } else {
+        statusEl.textContent = 'disconnected';
+        statusEl.className = 'disconnected';
+      }
+    }
+
+    function updateSubsDisplay() {
+      subsDiv.innerHTML = '';
+      if (subscriptions.size === 0) subsDiv.textContent = 'No subscriptions';
+      else {
+        subscriptions.forEach(t => {
+          const span = document.createElement('div');
+          span.textContent = t;
+          subsDiv.appendChild(span);
+        });
+      }
+    }
+
+    // connect
+    btnConnect.addEventListener('click', () => {
+      ensureClientId();
+      const host = hostEl.value.trim();
+      const port = portEl.value.trim();
+      const path = pathEl.value.trim();
+      const useTLS = useTLSEl.checked;
+
+      if (!host || !port) {
+        alert('Host et port requis');
+        return;
+      }
+
+      const protocol = useTLS ? 'wss' : 'ws';
+      const url = protocol + '://' + host + ':' + port + path;
+      const options = {
+        clientId: clientIdEl.value,
+        keepalive: 30,
+        reconnectPeriod: 2000,
+        clean: true,
+      };
+
+      addLog('system', 'Connecting to ' + url);
+      try {
+        client = mqtt.connect(url, options);
+      } catch(err) {
+        addLog('system', 'Connection error: ' + err.message);
+        return;
+      }
+
+      client.on('connect', function () {
+        addLog('system', 'Connected as ' + options.clientId);
+        setStatus(true);
+      });
+
+      client.on('reconnect', function () {
+        addLog('system', 'Reconnecting...');
+      });
+
+      client.on('close', function () {
+        addLog('system', 'Disconnected');
+        setStatus(false);
+      });
+
+      client.on('error', function (err) {
+        addLog('system', 'Error: ' + (err && err.message ? err.message : JSON.stringify(err)));
+        // console.error(err);
+      });
+
+      client.on('message', function (topic, message) {
+        // message is Buffer
+        const payload = message.toString();
+        addLog(topic, payload);
+      });
+    });
+
+    // disconnect
+    btnDisconnect.addEventListener('click', () => {
+      if (client) {
+        client.end(true);
+        client = null;
+        setStatus(false);
+        addLog('system','Client disconnected by user');
+      }
+    });
+
+    // subscribe
+    btnSub.addEventListener('click', () => {
+      const topic = subTopicEl.value.trim();
+      if (!topic) { alert('Indique un topic'); return; }
+      if (!client || !client.connected) { alert('Non connecté'); return; }
+      client.subscribe(topic, {qos:0}, (err, granted) => {
+        if (err) addLog('system','Subscribe error: ' + err.message);
+        else {
+          subscriptions.add(topic);
+          updateSubsDisplay();
+          addLog('system','Subscribed ' + topic);
+        }
+      });
+    });
+
+    // unsubscribe
+    btnUnsub.addEventListener('click', () => {
+      const topic = subTopicEl.value.trim();
+      if (!topic) { alert('Indique un topic'); return; }
+      if (!client || !client.connected) { alert('Non connecté'); return; }
+      client.unsubscribe(topic, (err) => {
+        if (err) addLog('system','Unsub error: ' + err.message);
+        else {
+          subscriptions.delete(topic);
+          updateSubsDisplay();
+          addLog('system','Unsubscribed ' + topic);
+        }
+      });
+    });
+
+    // publish
+    btnPub.addEventListener('click', () => {
+      const topic = pubTopicEl.value.trim();
+      let payload = pubPayloadEl.value;
+      if (!topic) { alert('Topic requis'); return; }
+      if (!client || !client.connected) { alert('Non connecté'); return; }
+      client.publish(topic, payload, {qos:0}, (err) => {
+        if (err) addLog('system','Publish err: ' + err.message);
+        else addLog('pub ' + topic, payload);
+      });
+    });
+
+    // quick commands (publish to auth/door/command)
+    btnOpen.addEventListener('click', () => {
+      if (!client || !client.connected) { alert('Non connecté'); return; }
+      client.publish('auth/door/command','OPEN');
+      addLog('pub auth/door/command','OPEN');
+    });
+    btnList.addEventListener('click', () => {
+      if (!client || !client.connected) { alert('Non connecté'); return; }
+      client.publish('auth/door/command','LIST');
+      addLog('pub auth/door/command','LIST');
+    });
+    btnClear.addEventListener('click', () => {
+      if (!client || !client.connected) { if (!confirm('Non connecté. Etes-vous sûr ?')) return; }
+      if (!confirm('CONFIRMER: Clear all users?')) return;
+      client.publish('auth/door/command','CLEAR');
+      addLog('pub auth/door/command','CLEAR');
+    });
+
+    // copy log
+    btnCopy.addEventListener('click', () => {
+      const text = msgsEl.innerText;
+      navigator.clipboard.writeText(text).then(() => alert('Log copied'));
+    });
+
+    // pre-populate clientId
+    clientIdEl.value = 'webui-' + Math.random().toString(16).substr(2,8);
+
+    // helper: subscribe to auth/door/# quickly by clicking subs field
+    subsDiv.addEventListener('click', () => {
+      subTopicEl.value = 'auth/door/#';
+    });
+
+    // nice: auto-subscribe to auth/door/# on connect? (commented out)
+    // client.on('connect', () => { if (client) client.subscribe('auth/door/#'); });
+  </script>
+</body>
+</html>
