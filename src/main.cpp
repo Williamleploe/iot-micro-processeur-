@@ -39,9 +39,8 @@ const unsigned long DISPLAY_MS = 1500;
 const char *PREF_NS = "auth";
 
 // ----------------- ===== MQTT / WiFi config =====
-// <-- TU AS DÉJÀ MIS TES IDENTIFIANTS WI-FI ICI -->
-const char* WIFI_SSID = "Bbox-857F91A1";
-const char* WIFI_PASS = "fTPFG!Avek6T1q*M";
+const char* WIFI_SSID = "william";  // Remplir ici l'identifiant du WiFi
+const char* WIFI_PASS = "12345678"; // Remplir ici le mot de passe du WiFi
 
 const char* MQTT_SERVER = "broker.emqx.io";
 const uint16_t MQTT_PORT = 1883;
@@ -260,7 +259,6 @@ void reconnectMqtt() {
     Serial.print("Resolved "); Serial.print(MQTT_SERVER); Serial.print(" -> "); Serial.println(brokerIp.toString());
   } else {
     Serial.print("DNS resolve failed for "); Serial.println(MQTT_SERVER);
-    // continue anyway; PubSubClient accepts host string (it will try resolve internally)
   }
 
   Serial.print("Connecting MQTT...");
