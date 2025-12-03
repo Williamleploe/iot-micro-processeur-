@@ -1,4 +1,7 @@
+// main.cpp
 // MQTT + WiFi + Auth system (RFID + Fingerprint) - ESP32
+// Ajoute appairage initié depuis le site (pair request / code affiché sur LCD / confirmation)
+
 #include <WiFi.h>
 #include <PubSubClient.h>
 
@@ -39,7 +42,7 @@ const unsigned long DISPLAY_MS = 1500;
 const char *PREF_NS = "auth";
 
 // ----------------- ===== MQTT / WiFi config =====
-const char* WIFI_SSID = "william";  // Remplir ici l'identifiant du WiFi
+const char* WIFI_SSID = "raphael";  // Remplir ici l'identifiant du WiFi
 const char* WIFI_PASS = "12345678"; // Remplir ici le mot de passe du WiFi
 
 const char* MQTT_SERVER = "broker.emqx.io";
@@ -50,9 +53,35 @@ const char* MQTT_PASS = ""; // si auth nécessaire remplis ici
 const char* TOPIC_EVENT = "auth/door/event";
 const char* TOPIC_COMMAND = "auth/door/command";
 const char* TOPIC_STATUS = "auth/door/status";
+const char* TOPIC_PAIR = "auth/door/pair";
+const char* TOPIC_PAIR_STATUS = "auth/door/pair_status";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+// ----------------- Appairage / stockage -----------------
+// Max paired clients persisted
+const uint8_t MAX_PAIRED = 20;
+
+// Preferences keys:
+// "pair_count" -> uint16
+// "pair0", "pair1", ...
+const char *PREF_PAIR_COUNT = "pair_count";
+const char *PREF_PAIR_BASE = "pair"; // we'll append index
+
+// Pending challenges (in RAM)
+struct PendingChallenge {
+  String clientId;
+  String code; // 6-digit
+  unsigned long expiresAt;
+  bool used;
+};
+
+const uint8_t MAX_PENDING = 8;
+PendingChallenge pending[MAX_PENDING];
+
+// Duration for challenge validity (ms)
+const unsigned long CHALLENGE_TTL = 120000; // 2 minutes
 
 // ----------------- Helpers -----------------
 void lcdPrintBoth(const char *l1, const char *l2) {
@@ -79,7 +108,294 @@ void openLock() {
   lockServo.write(SERVO_CLOSED_POS);
 }
 
-// ----------------- Persistence utilities -----------------
+// ----------------- Persistence utilities (paired clients) -----------------
+uint16_t pairedCount() {
+  return prefs.getUShort(PREF_PAIR_COUNT, 0);
+}
+
+void setPairedCount(uint16_t v) {
+  prefs.putUShort(PREF_PAIR_COUNT, v);
+}
+
+String pairedKeyName(uint16_t idx) {
+  // returns key like "pair0", "pair1"
+  char buf[16];
+  snprintf(buf, sizeof(buf), "pair%u", idx);
+  return String(buf);
+}
+
+String getPairedAt(uint16_t idx) {
+  return prefs.getString(pairedKeyName(idx).c_str(), "");
+}
+
+bool isPairedClient(const String &clientId) {
+  uint16_t n = pairedCount();
+  for (uint16_t i = 0; i < n; ++i) {
+    if (getPairedAt(i) == clientId) return true;
+  }
+  return false;
+}
+
+bool addPairedClient(const String &clientId) {
+  if (clientId.length() == 0) return false;
+  if (isPairedClient(clientId)) return false;
+  uint16_t n = pairedCount();
+  if (n >= MAX_PAIRED) return false;
+  prefs.putString(pairedKeyName(n).c_str(), clientId);
+  setPairedCount(n + 1);
+  Serial.print("Paired saved: "); Serial.println(clientId);
+  return true;
+}
+
+bool removePairedClient(const String &clientId) {
+  uint16_t n = pairedCount();
+  for (uint16_t i = 0; i < n; ++i) {
+    String k = getPairedAt(i);
+    if (k == clientId) {
+      // shift remaining
+      for (uint16_t j = i; j < n - 1; ++j) {
+        String next = getPairedAt(j + 1);
+        prefs.putString(pairedKeyName(j).c_str(), next);
+      }
+      prefs.remove(pairedKeyName(n - 1).c_str());
+      setPairedCount(n - 1);
+      Serial.print("Paired removed: "); Serial.println(clientId);
+      return true;
+    }
+  }
+  return false;
+}
+
+void listPairedClientsSerial() {
+  uint16_t n = pairedCount();
+  Serial.print("Paired clients count: "); Serial.println(n);
+  for (uint16_t i = 0; i < n; ++i) {
+    Serial.print(" - "); Serial.println(getPairedAt(i));
+  }
+}
+
+// ----------------- Pending challenge utilities -----------------
+void initPending() {
+  for (uint8_t i = 0; i < MAX_PENDING; ++i) {
+    pending[i].clientId = "";
+    pending[i].code = "";
+    pending[i].expiresAt = 0;
+    pending[i].used = false;
+  }
+}
+
+String genCode6() {
+  uint32_t r = esp_random() & 0xFFFFFF;
+  int code = r % 1000000;
+  char b[8];
+  snprintf(b, sizeof(b), "%06d", code);
+  return String(b);
+}
+
+bool addPending(const String &clientId, String &outCode) {
+  // find free slot
+  for (uint8_t i = 0; i < MAX_PENDING; ++i) {
+    if (pending[i].clientId.length() == 0 || (pending[i].expiresAt != 0 && millis() > pending[i].expiresAt)) {
+      pending[i].clientId = clientId;
+      pending[i].code = genCode6();
+      pending[i].expiresAt = millis() + CHALLENGE_TTL;
+      pending[i].used = false;
+      outCode = pending[i].code;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool verifyPending(const String &clientId, const String &code) {
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < MAX_PENDING; ++i) {
+    if (pending[i].clientId == clientId && !pending[i].used && pending[i].expiresAt > now) {
+      if (pending[i].code == code) {
+        pending[i].used = true;
+        // clear slot
+        pending[i].clientId = "";
+        pending[i].code = "";
+        pending[i].expiresAt = 0;
+        pending[i].used = false;
+        return true;
+      } else return false;
+    }
+  }
+  return false;
+}
+
+void cleanupPending() {
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < MAX_PENDING; ++i) {
+    if (pending[i].clientId.length() && pending[i].expiresAt != 0 && now > pending[i].expiresAt) {
+      pending[i].clientId = "";
+      pending[i].code = "";
+      pending[i].expiresAt = 0;
+      pending[i].used = false;
+    }
+  }
+}
+
+// ----------------- MQTT helpers -----------------
+void publishEvent(const char* result, const char* method, const char* key, const char* name) {
+  if (!mqttClient.connected()) {
+    Serial.println("publishEvent: mqtt not connected");
+    return;
+  }
+  String payload = "{";
+  payload += "\"result\":\""; payload += result; payload += "\",";
+  payload += "\"method\":\""; payload += method; payload += "\",";
+  payload += "\"key\":\""; payload += key; payload += "\",";
+  payload += "\"name\":\""; payload += name; payload += "\",";
+  payload += "\"ts\":"; payload += String(millis());
+  payload += "}";
+  mqttClient.publish(TOPIC_EVENT, payload.c_str());
+  Serial.print("MQTT published: ");
+  Serial.println(payload);
+}
+
+void publishStatus(const char* s) {
+  if (!mqttClient.connected()) return;
+  mqttClient.publish(TOPIC_STATUS, s);
+}
+
+void clearAllUsers();
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  msg.trim();
+  Serial.print("MQTT RX topic=");
+  Serial.print(topic);
+  Serial.print(" msg=");
+  Serial.println(msg);
+
+  // ---- Pairing topic ----
+  if (String(topic) == TOPIC_PAIR) {
+    // Expect simple formats:
+    // REQ:<clientId>          -> request code (ESP shows code on LCD)
+    // CONF:<clientId>:<code>  -> confirm with the code shown on device
+    // UNP:<clientId>          -> unpair
+    if (msg.startsWith("REQ:")) {
+      String clientId = msg.substring(4);
+      clientId.trim();
+      if (clientId.length() == 0) {
+        mqttClient.publish(TOPIC_PAIR_STATUS, "REQ_ERR:missing_clientId");
+        return;
+      }
+      String code;
+      if (!addPending(clientId, code)) {
+        mqttClient.publish(TOPIC_PAIR_STATUS, ("REQ_ERR:busy"));
+        return;
+      }
+      // Show code on LCD so user can read and enter it on the web UI
+      lcdPrintBoth("Pair code:", code.c_str());
+      Serial.print("Pair code for "); Serial.print(clientId); Serial.print(" = "); Serial.println(code);
+      // Inform web that a challenge was generated (not secret: user must read LCD)
+      String out = "CHALLENGE:" + clientId + ":" + code; // optional, mostly for debugging
+      mqttClient.publish(TOPIC_PAIR_STATUS, out.c_str());
+      return;
+    } else if (msg.startsWith("CONF:")) {
+      // CONF:<clientId>:<code>
+      int first = msg.indexOf(':', 5); // find second colon after "CONF:"
+      if (first <= 5) { mqttClient.publish(TOPIC_PAIR_STATUS, "CONF_ERR:bad_format"); return; }
+      String clientId = msg.substring(5, first);
+      String code = msg.substring(first + 1);
+      clientId.trim(); code.trim();
+      if (verifyPending(clientId, code)) {
+        if (addPairedClient(clientId)) {
+          String ok = "PAIR_OK:" + clientId;
+          mqttClient.publish(TOPIC_PAIR_STATUS, ok.c_str());
+          Serial.print("Client paired: "); Serial.println(clientId);
+          lcdPrintBoth("Paired:", clientId.c_str());
+        } else {
+          mqttClient.publish(TOPIC_PAIR_STATUS, ("PAIR_ERR:save_failed"));
+        }
+      } else {
+        String fail = "PAIR_FAIL:" + clientId;
+        mqttClient.publish(TOPIC_PAIR_STATUS, fail.c_str());
+        Serial.print("Pair verify failed for "); Serial.println(clientId);
+      }
+      return;
+    } else if (msg.startsWith("UNP:")) {
+      String clientId = msg.substring(4);
+      clientId.trim();
+      if (removePairedClient(clientId)) {
+        String ok = "UNPAIR_OK:" + clientId;
+        mqttClient.publish(TOPIC_PAIR_STATUS, ok.c_str());
+        Serial.print("Client unpaired: "); Serial.println(clientId);
+        lcdPrintBoth("Unpaired:", clientId.c_str());
+      } else {
+        mqttClient.publish(TOPIC_PAIR_STATUS, ("UNPAIR_ERR:not_found"));
+      }
+      return;
+    } else {
+      mqttClient.publish(TOPIC_PAIR_STATUS, ("PAIR_ERR:unknown_cmd"));
+      return;
+    }
+  }
+
+  // ---- Command topic ----
+  if (String(topic) == TOPIC_COMMAND) {
+    // Expect message format: CMD:<clientId>:<COMMAND>
+    // Example: CMD:web_ab12:OPEN
+    if (!msg.startsWith("CMD:")) {
+      mqttClient.publish(TOPIC_STATUS, "CMD_ERR:bad_format");
+      return;
+    }
+    int idx1 = msg.indexOf(':', 4);
+    if (idx1 <= 4) { mqttClient.publish(TOPIC_STATUS, "CMD_ERR:bad_format2"); return; }
+    String clientId = msg.substring(4, idx1);
+    String command = msg.substring(idx1 + 1);
+    clientId.trim(); command.trim();
+    if (!isPairedClient(clientId)) {
+      mqttClient.publish(TOPIC_STATUS, ("CMD_REJECTED:not_paired:" + clientId).c_str());
+      Serial.print("Rejected CMD from non-paired client: "); Serial.println(clientId);
+      return;
+    }
+    Serial.print("Authorized CMD from "); Serial.print(clientId); Serial.print(" -> "); Serial.println(command);
+
+    // Handle commands (OPEN/LIST/CLEAR)
+    if (command.equalsIgnoreCase("OPEN")) {
+      lcdPrintBoth("MQTT","OPEN");
+      openLock();
+      publishEvent("remote_open","mqtt","", clientId.c_str());
+    } else if (command.equalsIgnoreCase("LIST")) {
+      uint16_t n = prefs.getUShort(PREF_PAIR_COUNT, 0);
+      String payload = "{\"cmd\":\"list\",\"count\":";
+      payload += String(n);
+      payload += ",\"users\":[";
+      for (uint16_t i = 0; i < n; ++i) {
+        if (i) payload += ",";
+        String entry = getPairedAt(i);
+        payload += "{\"i\":" + String(i) + ",\"clientId\":\"" + entry + "\"}";
+      }
+      payload += "]}";
+      mqttClient.publish(TOPIC_EVENT, payload.c_str());
+    } else if (command.equalsIgnoreCase("CLEAR")) {
+      // Only allow CLEAR if client is paired (already checked)
+      // Clear paired list + user DB
+      uint16_t n = prefs.getUShort(PREF_PAIR_COUNT, 0);
+      for (uint16_t i = 0; i < n; ++i) {
+        prefs.remove(pairedKeyName(i).c_str());
+      }
+      setPairedCount(0);
+      clearAllUsers(); // reuse existing function to clear users
+      mqttClient.publish(TOPIC_EVENT, "{\"cmd\":\"cleared_via_mqtt\",\"result\":\"ok\"}");
+      lcdPrintBoth("Cleared", "All users");
+      Serial.println("Cleared paired and users via MQTT CLEAR");
+    } else {
+      mqttClient.publish(TOPIC_STATUS, "CMD_ERR:unknown");
+    }
+    return;
+  }
+
+  // Other topics: keep previous behavior (e.g. none)
+}
+
+// ----------------- Finding / clearing users (reuse) -----------------
+
 uint16_t userCount() { return prefs.getUInt("count", 0); }
 void setUserCount(uint16_t v) { prefs.putUInt("count", v); }
 
@@ -112,28 +428,16 @@ String findUserByRFID(const String &key) {
 
 String findUserByFP(uint16_t id) {
   uint16_t n = userCount();
-  Serial.print("Recherche FP ID: ");
-  Serial.println(id);
   for (uint16_t i = 0; i < n; ++i) {
     String base = "user" + String(i) + "_";
     String t = prefs.getString((base + "type").c_str(), "");
     if (t == "fp") {
       String k = prefs.getString((base + "key").c_str(), "");
-      Serial.print("Comparaison index ");
-      Serial.print(i);
-      Serial.print(" key stored: ");
-      Serial.println(k);
       if (k == String(id)) {
-        String name = prefs.getString((base + "name").c_str(), "");
-        Serial.print("Match trouvé index ");
-        Serial.print(i);
-        Serial.print(" name ");
-        Serial.println(name);
-        return name;
+        return prefs.getString((base + "name").c_str(), "");
       }
     }
   }
-  Serial.println("Aucun utilisateur FP trouvé");
   return "";
 }
 
@@ -165,70 +469,7 @@ void clearAllUsers() {
   prefs.putUInt("next_fp_id", 1);
 }
 
-// ----------------- MQTT helpers -----------------
-void publishEvent(const char* result, const char* method, const char* key, const char* name) {
-  if (!mqttClient.connected()) {
-    Serial.println("publishEvent: mqtt not connected");
-    return;
-  }
-  String payload = "{";
-  payload += "\"result\":\""; payload += result; payload += "\",";
-  payload += "\"method\":\""; payload += method; payload += "\",";
-  payload += "\"key\":\""; payload += key; payload += "\",";
-  payload += "\"name\":\""; payload += name; payload += "\",";
-  payload += "\"ts\":"; payload += String(millis());
-  payload += "}";
-  mqttClient.publish(TOPIC_EVENT, payload.c_str());
-  Serial.print("MQTT published: ");
-  Serial.println(payload);
-}
-
-void publishStatus(const char* s) {
-  if (!mqttClient.connected()) return;
-  mqttClient.publish(TOPIC_STATUS, s);
-}
-
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String msg;
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  msg.trim();
-  Serial.print("MQTT RX topic=");
-  Serial.print(topic);
-  Serial.print(" msg=");
-  Serial.println(msg);
-
-  if (String(topic) == TOPIC_COMMAND) {
-    if (msg.equalsIgnoreCase("OPEN")) {
-      Serial.println("MQTT command: OPEN");
-      lcdPrintBoth("MQTT","OPEN");
-      openLock();
-      publishEvent("remote_open","mqtt","", "remote");
-    } else if (msg.equalsIgnoreCase("LIST")) {
-      uint16_t n = userCount();
-      String payload = "{\"cmd\":\"list\",\"count\":";
-      payload += String(n);
-      payload += ",\"users\":[";
-      for (uint16_t i = 0; i < n; ++i) {
-        if (i) payload += ",";
-        String base = "user" + String(i) + "_";
-        String t = prefs.getString((base + "type").c_str(), "");
-        String k = prefs.getString((base + "key").c_str(), "");
-        String name = prefs.getString((base + "name").c_str(), "");
-        payload += "{\"i\":" + String(i) + ",\"type\":\"" + t + "\",\"key\":\"" + k + "\",\"name\":\"" + name + "\"}";
-      }
-      payload += "]}";
-      mqttClient.publish(TOPIC_EVENT, payload.c_str());
-    } else if (msg.equalsIgnoreCase("CLEAR")) {
-      clearAllUsers();
-      mqttClient.publish(TOPIC_EVENT, "{\"cmd\":\"clear\",\"result\":\"ok\"}");
-      Serial.println("Cleared users per MQTT command");
-    } else {
-      Serial.println("MQTT unknown command");
-      mqttClient.publish(TOPIC_STATUS, "unknown_cmd");
-    }
-  }
-}
-
+// ----------------- WiFi & MQTT connect -----------------
 void connectWiFi() {
   Serial.print("Connecting WiFi ");
   Serial.println(WIFI_SSID);
@@ -262,9 +503,7 @@ void reconnectMqtt() {
   }
 
   Serial.print("Connecting MQTT...");
-  // Use MAC-based clientId to reduce collisions
   String clientId = "ESP32-" + WiFi.macAddress();
-  // PubSubClient connect
   while (!mqttClient.connected()) {
     bool ok;
     if (MQTT_USER && strlen(MQTT_USER) > 0) {
@@ -279,10 +518,13 @@ void reconnectMqtt() {
   Serial.println("");
   Serial.println("MQTT connected");
   mqttClient.subscribe(TOPIC_COMMAND);
+  mqttClient.subscribe(TOPIC_PAIR);
   publishStatus("connected");
 }
 
-// ----------------- Enrollment flows -----------------
+// ----------------- Enrollment flows (RFID / Finger) -----------------
+// (Reused from your original code — kept intact)
+
 String readLineSerial(unsigned long timeout = 30000) {
   unsigned long start = millis();
   String s = "";
@@ -425,6 +667,7 @@ void showHelp() {
   Serial.println(F(" r      -> enroll RFID"));
   Serial.println(F(" f      -> enroll Finger"));
   Serial.println(F(" list   -> list users"));
+  Serial.println(F(" listp  -> list paired clients"));
   Serial.println(F(" clear  -> clear all users (prefs)"));
   Serial.println(F(" delmod -> empty fingerprint database"));
   Serial.println(F(" help   -> show commands"));
@@ -451,6 +694,8 @@ void setup() {
   delay(100);
 
   prefs.begin(PREF_NS, false);
+
+  initPending();
 
   Wire.begin(I2C_SDA, I2C_SCL);
   lcd.init();
@@ -481,6 +726,9 @@ void setup() {
   Serial.println(prefs.getUInt("next_fp_id", 1));
   Serial.print("Stored users count: ");
   Serial.println(userCount());
+  Serial.print("Paired clients saved: ");
+  Serial.println(pairedCount());
+  listPairedClientsSerial();
 
   // WiFi & MQTT init
   connectWiFi();
@@ -496,6 +744,9 @@ void setup() {
 }
 
 void loop() {
+  // housekeeping pending challenges
+  cleanupPending();
+
   if (WiFi.status() == WL_CONNECTED) {
     if (!mqttClient.connected()) reconnectMqtt();
     mqttClient.loop();
@@ -517,6 +768,8 @@ void loop() {
       showHelp();
     } else if (cmd == "list") {
       listUsers();
+    } else if (cmd == "listp") {
+      listPairedClientsSerial();
     } else if (cmd == "clear") {
       Serial.println("Clearing all user prefs...");
       clearAllUsers();
