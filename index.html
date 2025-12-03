@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Dashboard IoT - RFID & Empreinte</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎛️ Dashboard IoT - ESP32 Auth</h1>
+            <div class="status-bar">
+                <div id="mqtt-status" class="conn-value offline">MQTT: Déconnecté</div>
+                <div id="last-update">MAJ: --:--:--</div>
+                <button class="btn btn-secondary" onclick="toggleConfig()" style="font-size:0.8em;">⚙️ Config</button>
+            </div>
+        </header>
+
+        <!-- CONFIG PANEL -->
+        <div id="config-panel" class="config-box">
+            <h4>Configuration Broker MQTT</h4>
+
+            <div class="config-note">
+                <strong>Note :</strong> ces champs définissent la connexion au broker MQTT (Host, Port, Path, ClientId, Topic).
+            </div>
+
+            <div class="config-grid">
+                <div class="cfg-item">
+                    <label for="cfg-host">Host</label>
+                    <input type="text" id="cfg-host" value="broker.emqx.io" placeholder="Host">
+                </div>
+
+                <div class="cfg-item small">
+                    <label for="cfg-port">Port</label>
+                    <input type="text" id="cfg-port" value="8083" placeholder="Port (WebSocket)">
+                </div>
+
+                <div class="cfg-item">
+                    <label for="cfg-path">Path</label>
+                    <input type="text" id="cfg-path" value="/mqtt" placeholder="Path (ex: /mqtt)">
+                </div>
+
+                <div class="cfg-item">
+                    <label for="cfg-clientid">ClientId</label>
+                    <input type="text" id="cfg-clientid" placeholder="ClientId (optionnel)">
+                </div>
+
+                <div class="cfg-item wide">
+                    <label for="cfg-topic-sub">Topic Sub</label>
+                    <input type="text" id="cfg-topic-sub" value="auth/door/#" placeholder="Topic Sub">
+                </div>
+            </div>
+
+            <div style="margin-top:10px;">
+                <button class="btn btn-primary" onclick="connectMQTT()">Reconnecter</button>
+                <button class="btn btn-secondary" onclick="disconnectMQTT()">Déconnecter</button>
+            </div>
+        </div>
+
+        <!-- DASHBOARD -->
+        <div class="dashboard-grid">
+            
+            <div class="card full-width">
+                <h3>📱 ÉVÉNEMENTS D'ACCÈS</h3>
+                <div class="section-description">
+                    <p>Log des tentatives d'accès (Topic: auth/door/event)</p>
+                </div>
+                
+                <div class="esp32-messages">
+                    <div class="message-header">
+                        <span>Méthode</span>
+                        <span>Utilisateur / Clé</span>
+                        <span>Résultat</span>
+                        <span>Heure</span>
+                    </div>
+                    <div id="esp32-message-log" class="message-log esp32-log" aria-live="polite"></div>
+                </div>
+
+                <div class="stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Accès RFID:</span>
+                        <span id="rfid-count" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Accès Empreinte:</span>
+                        <span id="fingerprint-count" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Refusés:</span>
+                        <span id="denied-count" class="stat-value" style="color:red">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📡 DERNIER RFID</h3>
+                <div class="status-container">
+                    <div id="rfid-status" class="device-status waiting">
+                        <div class="value" id="rfid-val">En attente...</div>
+                        <div class="time" id="rfid-time">--:--:--</div>
+                    </div>
+                    <div class="history">
+                        <h4>Historique RFID</h4>
+                        <div id="rfid-history" class="history-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>👆 DERNIÈRE EMPREINTE</h3>
+                <div class="status-container">
+                    <div id="fingerprint-status" class="device-status waiting">
+                        <div class="value" id="fp-val">En attente...</div>
+                        <div class="time" id="fp-time">--:--:--</div>
+                    </div>
+                    <div class="history">
+                        <h4>Historique Empreintes</h4>
+                        <div id="fingerprint-history" class="history-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card commands">
+                <h3>⚙️ COMMANDES (auth/door/command)</h3>
+                <div class="button-grid">
+                    <button class="btn btn-success" onclick="sendCommand('OPEN')">
+                        🔓 OUVRIR PORTE
+                    </button>
+                    <button class="btn btn-info" onclick="sendCommand('LIST')">
+                        📋 LISTER USERS
+                    </button>
+                    <button class="btn btn-danger" onclick="confirmClear()">
+                        🗑️ SUPPRIMER TOUT
+                    </button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('esp32-message-log').innerHTML=''">
+                        🧹 Vider Logs
+                    </button>
+                </div>
+                
+                <div class="custom-command">
+                    <h4>Log Brut (Debug)</h4>
+                    <div id="raw-log" class="raw-log">
+                        En attente de données...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- LOGIQUE DASHBOARD ---
+        let client = null;
+        let counts = { rfid: 0, fp: 0, denied: 0 };
+
+        function toggleConfig() {
+            document.getElementById('config-panel').classList.toggle('visible');
+        }
+
+        function ensureClientIdProvided() {
+            const el = document.getElementById('cfg-clientid');
+            if (!el.value) el.value = 'web_dashboard_' + Math.random().toString(16).substr(2, 8);
+            return el.value;
+        }
+
+        // Connexion MQTT (WS par défaut — option WSS supprimée)
+        function connectMQTT() {
+            const host = document.getElementById('cfg-host').value.trim();
+            const port = document.getElementById('cfg-port').value.trim();
+            const path = document.getElementById('cfg-path').value.trim() || '/mqtt';
+            const topicSub = document.getElementById('cfg-topic-sub').value.trim();
+            const clientId = ensureClientIdProvided();
+
+            if (!host || !port) { alert('Host et Port requis'); return; }
+
+            const url = `ws://${host}:${port}${path}`;
+
+            // Clean previous client
+            if (client) {
+                try { client.removeAllListeners(); client.end(true); } catch(e){ console.warn(e); }
+                client = null;
+            }
+
+            updateStatus(false);
+
+            try {
+                client = mqtt.connect(url, { clientId: clientId, clean: true, reconnectPeriod: 4000 });
+
+                client.on('connect', () => {
+                    updateStatus(true);
+                    console.log('Connecté à', url, 'clientId=', clientId);
+                    if(topicSub) {
+                        client.subscribe(topicSub, (err) => {
+                            if(!err) console.log(`Abonné à ${topicSub}`);
+                            else console.error('Subscribe error', err);
+                        });
+                    }
+                });
+
+                client.on('reconnect', () => { console.log('Reconnexion...'); });
+                client.on('close', () => { updateStatus(false); console.log('Fermé'); });
+                client.on('error', (err) => { updateStatus(false); console.error('MQTT Error', err); });
+
+                client.on('message', (topic, message) => {
+                    handleMessage(topic, message.toString());
+                });
+            } catch (e) {
+                console.error('Erreur init client', e);
+                alert('Erreur de connexion (voir console)');
+            }
+        }
+
+        function disconnectMQTT() {
+            if (client) {
+                try { client.removeAllListeners(); client.end(true); } catch(e){ console.warn(e); }
+                client = null;
+                updateStatus(false);
+            }
+        }
+
+        function updateStatus(connected) {
+            const el = document.getElementById('mqtt-status');
+            if (connected) {
+                el.textContent = "MQTT: Connecté";
+                el.className = "conn-value online";
+            } else {
+                el.textContent = "MQTT: Déconnecté";
+                el.className = "conn-value offline";
+            }
+            document.getElementById('last-update').textContent = "MAJ: " + new Date().toLocaleTimeString();
+        }
+
+        function sendCommand(cmd) {
+            if (!client || !client.connected) { alert("MQTT déconnecté"); return; }
+            client.publish('auth/door/command', cmd);
+            console.log('Publié', cmd);
+        }
+
+        function confirmClear() {
+            if (confirm("Voulez-vous vraiment effacer TOUS les utilisateurs de l'ESP32 ?")) {
+                sendCommand('CLEAR');
+            }
+        }
+
+        function handleMessage(topic, payloadStr) {
+            // raw log
+            const rawDiv = document.getElementById('raw-log');
+            rawDiv.innerHTML = `<div class="raw-line">[${new Date().toLocaleTimeString()}] ${topic}: ${payloadStr}</div>` + rawDiv.innerHTML;
+
+            if (topic.includes('status')) return;
+
+            try {
+                const data = JSON.parse(payloadStr);
+
+                if (data.cmd === 'list') {
+                    alert(`Liste reçue : ${data.count} utilisateurs (voir console F12)`);
+                    console.log('Users:', data.users);
+                    return;
+                }
+
+                const method = data.method;
+                const result = data.result;
+                const name = data.name || 'Inconnu';
+                const ts = new Date().toLocaleTimeString();
+
+                if (result === 'denied') {
+                    counts.denied++;
+                    document.getElementById('denied-count').textContent = counts.denied;
+                } else {
+                    if (method === 'rfid') {
+                        counts.rfid++;
+                        document.getElementById('rfid-count').textContent = counts.rfid;
+                        updateDeviceCard('rfid', name, result, ts);
+                    } else if (method === 'finger') {
+                        counts.fp++;
+                        document.getElementById('fingerprint-count').textContent = counts.fp;
+                        updateDeviceCard('fingerprint', name, result, ts);
+                    }
+                }
+
+                addLogEntry(method, name, result, ts);
+
+            } catch (e) {
+                console.log('Message non-JSON:', payloadStr);
+                addLogEntry('INFO', topic, payloadStr, new Date().toLocaleTimeString());
+            }
+        }
+
+        function updateDeviceCard(type, name, result, time) {
+            if (type === 'finger') type = 'fingerprint';
+            const statusEl = document.getElementById(`${type}-status`);
+            const valEl = document.getElementById(type === 'rfid' ? 'rfid-val' : 'fp-val');
+            const timeEl = document.getElementById(type === 'rfid' ? 'rfid-time' : 'fp-time');
+            const historyEl = document.getElementById(`${type}-history`);
+
+            statusEl.className = `device-status ${result}`;
+            valEl.textContent = name;
+            timeEl.textContent = time;
+
+            setTimeout(() => { statusEl.className = "device-status waiting"; }, 3000);
+
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `<strong>${time}</strong> - ${name} (${result})`;
+            historyEl.prepend(item);
+            if (historyEl.children.length > 5) historyEl.lastChild.remove();
+        }
+
+        function addLogEntry(method, user, result, time) {
+            const logEl = document.getElementById('esp32-message-log');
+            const row = document.createElement('div');
+            row.className = 'message-grid';
+
+            const color = (result === 'granted' || result === 'ok') ? 'green' : (result === 'denied' ? 'red' : 'blue');
+            const methodDisplay = method ? String(method).toUpperCase() : 'INFO';
+            const resultDisplay = result ? String(result).toUpperCase() : String(result);
+
+            row.innerHTML = `
+                <div>${methodDisplay}</div>
+                <div>${user}</div>
+                <div style="color:${color}; font-weight:bold;">${resultDisplay}</div>
+                <div>${time}</div>
+            `;
+            logEl.prepend(row);
+            if (logEl.children.length > 500) logEl.lastChild.remove();
+        }
+
+        // auto-connect on load (optional)
+        document.addEventListener('DOMContentLoaded', () => {
+            connectMQTT();
+        });
+    </script>
+</body>
+</html>
